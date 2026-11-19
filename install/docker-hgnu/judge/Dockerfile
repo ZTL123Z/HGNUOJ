@@ -8,7 +8,8 @@
 #     --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
 #     -t hgnuoj-judge:local install/docker-hgnu/judge
 #
-# 只装 C/C++/Python/Java 可以加 --build-arg COMPILERS=minimal（少装 ghc/golang/rustc 等，快很多）。
+# 默认只装 C/C++/Python/Java（COMPILERS=minimal）；需要 ghc/golang/rustc 等
+# 再加 --build-arg COMPILERS=full（下载量约 1GB）。
 #
 # sandbox 二进制（go-judge）的获取顺序：
 #   1. 构建上下文里的 ./sandbox 文件（离线内网可用）
@@ -26,7 +27,8 @@ ARG NPM_REGISTRY=
 # 或者用 HTTP_PROXY/HTTPS_PROXY build-arg 让容器走代理。
 ARG GO_JUDGE_URLS="https://github.com/criyle/go-judge/releases/download/v1.14.0/go-judge_1.14.0_linux_amd64v3 https://gh-proxy.com/https://github.com/criyle/go-judge/releases/download/v1.14.0/go-judge_1.14.0_linux_amd64v3 https://ghproxy.net/https://github.com/criyle/go-judge/releases/download/v1.14.0/go-judge_1.14.0_linux_amd64v3 https://ghfast.top/https://github.com/criyle/go-judge/releases/download/v1.14.0/go-judge_1.14.0_linux_amd64v3"
 # minimal = gcc/g++/python3/openjdk；full = 原来的全套
-ARG COMPILERS=full
+# CI 默认构建 minimal（快、体积小）；需要更多语言时手动传 --build-arg COMPILERS=full
+ARG COMPILERS=minimal
 
 COPY ./entrypoint.sh /root/entrypoint.sh
 

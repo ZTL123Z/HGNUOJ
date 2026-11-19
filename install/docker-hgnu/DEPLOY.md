@@ -2,13 +2,13 @@
 
 本目录（`install/docker-hgnu`）是 HGNUOJ 自己的编排方案，和上游 Hydro 的
 `install/docker` **完全分开**：上游目录保持原样，方便跟随上游更新、减少合并冲突；
-所有 HGNU 的定制（源码构建镜像、judge profile、国内源、部署文档）都放在这里。
+所有 HGNU 的定制（三个镜像的 Dockerfile、编排、发布流程、部署文档）都放在这里。
 
-本文档对应 **源码构建** 方式：镜像里打包的是本仓库当前 commit 的代码 + 编译好的前端产物，
-而不是从 npm 拉取的官方 `hydrooj` 包。
+本文档对应 **预构建镜像** 方式：三个镜像都由 GitHub Actions 构建并发布到 Docker Hub，
+部署时直接拉取，不需要在本地编译。想自己从源码构建见第三节。
 
 > 本目录下的 `backend/Dockerfile` 是从 npm 安装官方包的旧方式，保留作参考，
-> `docker-compose.yml` 已不再使用它。
+> `docker-compose.yml` 已不再使用它。只想尽快起服务请看 [README.md](README.md)。
 
 ---
 
@@ -17,7 +17,15 @@
 | 目录 | 内容 |
 | --- | --- |
 | `install/docker/` | 上游 Hydro 原版，**不要在这里改**，`git pull` 会直接跟随上游 |
-| `install/docker-hgnu/` | HGNU 定制版：源码构建镜像、judge profile、换源、部署文档 |
+| `install/docker-hgnu/` | HGNU 定制版：预构建镜像编排、源码构建 Dockerfile、部署文档 |
+
+三个镜像及来源：
+
+| 服务 | 镜像 | 内容 |
+| --- | --- | --- |
+| `oj-mongo` | `ztl123z/hgnu-mongodb` | 官方 `mongo:7-jammy` 薄封装 + 首次初始化脚本 |
+| `oj-backend` | `ztl123z/hgnu-backend` | 本仓库源码 + 编译好的前端产物 |
+| `oj-judge` | `ztl123z/hgnu-judge` | go-judge sandbox + 编译器链（默认 gcc/g++/python3/openjdk） |
 
 两个 compose 用相同的容器名（`oj-backend` / `oj-mongo` / `oj-judge`），
 **同一时间只能启动其中一套**。从官方目录切过来之前先停掉旧容器：
@@ -39,22 +47,22 @@ cp -a install/docker/data install/docker-hgnu/data
 ## 一、前置条件
 
 - Linux（本方案在 WSL2 / Debian 上验证过）
-- Docker Engine 24+，含 Buildx（`docker buildx version` 能输出版本）
-- 磁盘：镜像约 **3.4GB**（压缩后约 700MB），另需给 mongo 留空间
-- 网络：能访问 GitHub（拉取仓库）与 npm registry
+- Docker Engine 24+，含 compose v2（`docker compose version` 能输出版本）
+- 磁盘：三个镜像约 2.2GB + 1.2GB + 3.4GB，另需给 `data/` 留空间
+- 宿主机 80 端口空闲；`oj-judge` 需要 `privileged: true`
+- 网络：能访问 Docker Hub（或提前 `docker save` / `docker load` 离线传输）
 
 确认环境：
 
 ```bash
 docker version
-docker buildx version
 docker compose version
 ```
 
-> Docker 版本过低（缺 buildx）时构建会直接报
-> `BuildKit is enabled but the buildx component is missing or broken`。
-> Debian/Ubuntu 可 `apt install docker-buildx-plugin`，或从
-> <https://github.com/docker/buildx/releases> 下载二进制放到 `~/.docker/cli-plugins/docker-buildx`。
+要自己构建镜像时才需要 Buildx（`docker buildx version`）；缺 buildx 时构建会报
+`BuildKit is enabled but the buildx component is missing or broken`。
+Debian/Ubuntu 可 `apt install docker-buildx-plugin`，或从
+<https://github.com/docker/buildx/releases> 下载二进制放到 `~/.docker/cli-plugins/docker-buildx`。
 
 ---
 
@@ -67,7 +75,12 @@ cd HGNUOJ
 
 ---
 
-## 三、构建后端镜像
+## 三、（可选）自己构建镜像
+
+平时部署**不需要**这一节，直接拉 CI 发布的镜像即可。以下命令用于本地调试、
+改 Dockerfile 后验证，或离线环境自建。
+
+### 3.1 后端镜像
 
 **必须在仓库根目录执行**（构建上下文是整个工作区，Dockerfile 里要 `COPY` `packages/`、`framework/`）。
 
@@ -99,56 +112,74 @@ docker build -f install/docker-hgnu/source/Dockerfile \
 3. `yarn build:ui:iconfont` + webpack production：编译前端到 `packages/ui-default/public`
 4. 最终阶段只装 `pm2`、`curl`，把整个已编译工作区拷进去
 
+### 3.2 测评机镜像
+
+构建上下文是本目录下的 `judge/`。默认只装 gcc/g++/python3/openjdk
+（`COMPILERS=minimal`，镜像约 2.2GB）；需要 rust/ghc/golang/php/ruby/mono 时传 `full`。
+
+```bash
+docker build -f install/docker-hgnu/judge/Dockerfile \
+  --build-arg COMPILERS=minimal \
+  -t hgnuoj-judge:local install/docker-hgnu/judge
+```
+
+sandbox 二进制不在仓库里，Dockerfile 会按 `GO_JUDGE_URLS` 依次尝试下载；
+构建机不通 GitHub 时，先把二进制放到 `install/docker-hgnu/judge/sandbox`（已 gitignore），
+或用 `--build-arg GO_JUDGE_URLS=<可访问地址>` 指定。sandbox **只有 amd64 版本**。
+
+### 3.3 MongoDB 镜像
+
+```bash
+docker build -t hgnuoj-mongodb:local install/docker-hgnu/mongodb
+```
+
+在官方 `mongo:7-jammy` 上加了 `mongodb/initdb/` 里的首次初始化脚本，
+不开启认证，行为与官方一致。
+
 ---
 
 ## 四、启动服务
 
-### 方式 A：使用手动发布到 Docker Hub 的镜像（推荐）
+### 方式 A：使用 CI 发布的镜像（推荐）
 
-`master` 有新提交时会自动构建并冒烟检查，但**不会自动推送**。需要发版时，到 Actions
-页面选 `Image` → `Run workflow`，**分支选 `master`**、把 `publish` 设为 `true`，
-构建和冒烟检查通过后才会把镜像推到 `ztl123z/hgnu-backend`，同时打两个 tag：
+三个镜像都通过 GitHub Actions 发布到 Docker Hub，`docker compose` 默认就引用它们：
 
-- `latest`：最近一次手动发布的构建
-- `YYYYMMDD-HHMMSS`：构建时间（UTC），固定版本，适合回滚 / 核对代码版本。
-  例如 `20261119-063000`
-
-`publish` 默认是 `false`，所以平时手动运行也只是验证能构建、能跑，不会覆盖 `latest`。
-发布成功后在 Actions 的 run 摘要里会显示本次发布的 tag 和对应 commit。
+```bash
+cd install/docker-hgnu
+docker compose pull
+docker compose up -d
+docker compose ps                 # 三个都应是 healthy
+curl -I http://localhost/status   # 期望 200
+```
 
 这是 **public** 仓库，拉取不需要登录。
 
-```bash
-cd install/docker-hgnu
-OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest docker compose pull oj-backend
-OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest docker compose up -d
+每次发布的镜像同时打两个 tag：
+
+- `latest`：最近一次手动发布的构建
+- `YYYYMMDD-HHMMSS`：构建时间（UTC），固定版本，适合回滚 / 核对代码版本。
+  例如 `20261119-063000`。**同一批发布的三个镜像共用同一个时间戳。**
+
+生产环境建议固定版本，写进 `install/docker-hgnu/.env`（已被 `.gitignore` 排除）：
+
+```dotenv
+OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:20261119-063000
+OJ_JUDGE_IMAGE=ztl123z/hgnu-judge:20261119-063000
+OJ_MONGO_IMAGE=ztl123z/hgnu-mongodb:20261119-063000
 ```
 
-固定版本时把 `:latest` 换成对应的时间戳 tag，例如 `:20261119-063000`。`pull` 和 `up` 要用同一个
-`OJ_BACKEND_IMAGE`，否则 compose 会去拉默认的 `hgnuoj-backend:local`；
-想长期固定，可写入 `install/docker-hgnu/.env`（该文件已被 `.gitignore` 排除）：
-
-```bash
-OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest
-```
-
-CI 推送需要仓库 Actions secret `DOCKER_TOKEN`（Docker Hub Access Token，对
-`ztl123z/hgnu-backend` 有 push 权限）。不要把 token 写进 compose、`.env` 或代码仓库。
+三个变量都可以单独覆盖；只想换某一个时，只写那一个即可。
 
 ### 方式 B：使用本地构建镜像
 
-先按第三节构建出 `hgnuoj-backend:local`，再：
+先按第三节构建出 `hgnuoj-backend:local` 等镜像，再用环境变量指过去：
 
 ```bash
 cd install/docker-hgnu
+OJ_BACKEND_IMAGE=hgnuoj-backend:local \
+OJ_JUDGE_IMAGE=hgnuoj-judge:local \
+OJ_MONGO_IMAGE=hgnuoj-mongodb:local \
 docker compose up -d
-```
-
-默认只启动 **mongo + backend**，`oj-judge` 在 `judge` profile 里，不会自动构建。
-
-```bash
-docker compose ps                 # 两个容器都应是 healthy
-curl -I http://localhost/status   # 期望 200
 ```
 
 首次启动约 30 秒，entrypoint 会自动：
@@ -194,41 +225,23 @@ docker exec oj-backend hydrooj cli user setSuperAdmin 4
 
 ---
 
-## 六、测评机（可选）
+## 六、测评机
 
-judge 镜像要装一整套编译器（gcc/g++/openjdk/rustc/ghc/golang/php/ruby/mono），
-下载量约 1GB，**首次构建可能 30 分钟以上**，所以默认不启动。
+CI 发布的 `ztl123z/hgnu-judge` 默认带 gcc/g++/python3/openjdk，`docker compose up -d`
+会随另外两个服务一起启动，**不再需要本地构建，也不在 profile 里**。
+
+- 配置文件：`judge/judge.yaml`（后端地址、账号）和 `judge/mount.yaml`（沙箱挂载规则）
+- 默认账号：`judge` / `examplepassword`，对应后端 entrypoint 创建的 uid 2
+- 需要 rust/ghc/golang/php/ruby/mono：按 3.2 节用 `--build-arg COMPILERS=full`
+  自己构建，再用 `OJ_JUDGE_IMAGE` 指过去；或改 `image.yml` 里 judge 作业的
+  `build-args` 后手动发布一版
+- `judge/sandbox` 不入库（体积大），CI 构建时由 Dockerfile 从 `GO_JUDGE_URLS` 下载
+
+只想跑前后端时可以单独启动：
 
 ```bash
 cd install/docker-hgnu
-
-# 1. 准备 sandbox 二进制（构建容器不继承宿主机代理，GitHub 常常拉不下来）
-curl -L -o judge/sandbox \
-  https://github.com/criyle/go-judge/releases/download/v1.14.0/go-judge_1.14.0_linux_amd64v3
-chmod +x judge/sandbox
-
-# 2. 构建 judge 镜像
-docker build -f judge/Dockerfile \
-  --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
-  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-  --build-arg COMPILERS=minimal \
-  -t hgnuoj-judge:local judge
-
-# 3. 带 profile 启动
-docker compose --profile judge up -d
-```
-
-- `COMPILERS=minimal` 只装 gcc/g++/python3/openjdk，**实测 11 秒**建成。
-  需要 rust/ghc/golang/php/ruby/mono 就去掉这个参数（默认 `full`）。
-- `judge/sandbox` 已在 `.gitignore` 里，不会入库。
-- 没有本地 sandbox 文件时，Dockerfile 会依次尝试 `GO_JUDGE_URLS` 里的多个地址；
-  也可用 `--build-arg GO_JUDGE_URLS=<你的地址>` 指定。
-- sandbox 二进制**只有 amd64 版本**，arm64 机器需要自行处理。
-
-想每次 `up -d` 都带上 judge，在 `install/docker-hgnu/.env` 写：
-
-```
-COMPOSE_PROFILES=judge
+docker compose up -d oj-mongo oj-backend
 ```
 
 ---
@@ -236,12 +249,19 @@ COMPOSE_PROFILES=judge
 ## 七、更新代码
 
 使用 Docker Hub 镜像时，先确认有人在 Actions 里手动发布过（`publish=true`），然后在
-`install/docker-hgnu` 下拉新镜像并重建 backend 容器（mongo 和数据不动）：
+`install/docker-hgnu` 下拉新镜像并重建对应容器（mongo 和数据不动）：
 
 ```bash
 export OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest
 docker compose pull oj-backend
 docker compose up -d oj-backend
+```
+
+三个一起更新（固定版本时先改 `.env` 里的三个变量）：
+
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 使用本地构建镜像时：
@@ -268,9 +288,10 @@ cd install/docker-hgnu
 
 docker compose ps                          # 状态
 docker compose logs -f oj-backend          # 日志
+docker compose logs -f oj-judge            # 测评机日志
 docker compose restart oj-backend          # 重启
 docker compose down                        # 停止并删除容器（数据保留）
-docker compose --profile judge up -d       # 启动含 judge
+docker compose up -d                       # 启动全部（含 judge）
 
 # 进容器执行 CLI
 docker exec -it oj-backend hydrooj cli user setSuperAdmin 4
@@ -332,18 +353,18 @@ docker compose restart oj-backend
      hgnu_tool: true
    ```
 
-### `docker compose up -d` 卡在构建 judge
+### `docker compose up -d` 卡在拉取 judge 镜像
 
-judge 已移到 `judge` profile，默认不会被构建。
-如果仍然触发，检查是否在 `.env` 里设了 `COMPOSE_PROFILES=judge`。
+judge 镜像约 2.2GB，国内拉取可能较慢，属于网络问题，不是构建卡住。
+离线部署见 README.md 的「想完全离线部署」。
 
 ### 构建报 `buildx component is missing`
 
-见「一、前置条件」。
+只有自己构建镜像时才需要 buildx，见「一、前置条件」。
 
 ### judge 构建卡在下载 sandbox / ghc
 
-- sandbox：先把二进制放到 `judge/sandbox`（见第六节）
+- sandbox：先把二进制放到 `judge/sandbox`（见 3.2 节）
 - ghc 等编译器：加 `--build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn`
 
 ### 端口 80 被占用
@@ -357,17 +378,26 @@ judge 已移到 `judge` profile，默认不会被构建。
 
 | 文件 | 说明 |
 | --- | --- |
-| `install/docker-hgnu/source/Dockerfile` | 源码构建后端镜像（多阶段） |
-| `install/docker-hgnu/source/README.md` | 构建细节与产物检查方法 |
-| `install/docker-hgnu/docker-compose.yml` | 编排文件；backend 用 `hgnuoj-backend:local` |
+| `install/docker-hgnu/README.md` | 一键启动三个镜像的简明流程 |
+| `install/docker-hgnu/docker-compose.yml` | 编排文件，默认引用三个 Docker Hub 镜像 |
+| `install/docker-hgnu/source/Dockerfile` | 后端镜像（多阶段，源码 + 前端产物） |
+| `install/docker-hgnu/source/README.md` | 后端构建细节与产物检查方法 |
 | `install/docker-hgnu/judge/Dockerfile` | 测评机镜像，支持换源与本地 sandbox |
+| `install/docker-hgnu/judge/judge.yaml` | 测评机连接后端的配置 |
+| `install/docker-hgnu/judge/mount.yaml` | 沙箱挂载规则 |
+| `install/docker-hgnu/mongodb/Dockerfile` | MongoDB 薄封装镜像 |
+| `install/docker-hgnu/mongodb/initdb/` | 首次启动执行的初始化脚本 |
 | `install/docker-hgnu/backend/Dockerfile` | 旧的 npm 安装方式，compose 已不再使用 |
 | `.dockerignore` | 构建上下文排除规则 |
-| `.github/workflows/image.yml` | push 到 master 时构建、冒烟检查（不推送）；手动 `publish=true` 才推 Docker Hub |
+| `.github/workflows/image.yml` | 三个镜像的构建与手动发布 |
+| `.github/workflows/scripts/push-image.sh` | 打 tag + 推送的公共脚本 |
 
-镜像 tag 可用环境变量覆盖：
+镜像 tag 可用环境变量覆盖（也可以写进 `.env`）：
 
 ```bash
 OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest docker compose up -d
-OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:20261119-063000 docker compose up -d
+OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:20261119-063000 \
+OJ_JUDGE_IMAGE=ztl123z/hgnu-judge:20261119-063000 \
+OJ_MONGO_IMAGE=ztl123z/hgnu-mongodb:20261119-063000 \
+docker compose up -d
 ```
