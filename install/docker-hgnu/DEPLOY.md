@@ -1,9 +1,38 @@
 # HGNUOJ Docker 部署
 
+本目录（`install/docker-hgnu`）是 HGNUOJ 自己的编排方案，和上游 Hydro 的
+`install/docker` **完全分开**：上游目录保持原样，方便跟随上游更新、减少合并冲突；
+所有 HGNU 的定制（源码构建镜像、judge profile、国内源、部署文档）都放在这里。
+
 本文档对应 **源码构建** 方式：镜像里打包的是本仓库当前 commit 的代码 + 编译好的前端产物，
 而不是从 npm 拉取的官方 `hydrooj` 包。
 
-> `install/docker/backend/Dockerfile`（旧的 npm 方式）保留未删，但 compose 已不再使用它。
+> 本目录下的 `backend/Dockerfile` 是从 npm 安装官方包的旧方式，保留作参考，
+> `docker-compose.yml` 已不再使用它。
+
+---
+
+## 零、与官方 install/docker 的关系
+
+| 目录 | 内容 |
+| --- | --- |
+| `install/docker/` | 上游 Hydro 原版，**不要在这里改**，`git pull` 会直接跟随上游 |
+| `install/docker-hgnu/` | HGNU 定制版：源码构建镜像、judge profile、换源、部署文档 |
+
+两个 compose 用相同的容器名（`oj-backend` / `oj-mongo` / `oj-judge`），
+**同一时间只能启动其中一套**。从官方目录切过来之前先停掉旧容器：
+
+```bash
+cd install/docker && docker compose down
+cd ../docker-hgnu && docker compose up -d
+```
+
+数据目录也不共享：本目录使用 `install/docker-hgnu/data`。如果需要沿用官方目录下已有的
+数据，在启动前把 `install/docker/data` 复制过来：
+
+```bash
+cp -a install/docker/data install/docker-hgnu/data
+```
 
 ---
 
@@ -43,13 +72,13 @@ cd HGNUOJ
 **必须在仓库根目录执行**（构建上下文是整个工作区，Dockerfile 里要 `COPY` `packages/`、`framework/`）。
 
 ```bash
-docker build -f install/docker/source/Dockerfile -t hgnuoj-backend:local .
+docker build -f install/docker-hgnu/source/Dockerfile -t hgnuoj-backend:local .
 ```
 
 国内网络建议换源：
 
 ```bash
-docker build -f install/docker/source/Dockerfile \
+docker build -f install/docker-hgnu/source/Dockerfile \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
   --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
   -t hgnuoj-backend:local .
@@ -90,14 +119,14 @@ docker build -f install/docker/source/Dockerfile \
 这是 **public** 仓库，拉取不需要登录。
 
 ```bash
-cd install/docker
+cd install/docker-hgnu
 OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest docker compose pull oj-backend
 OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest docker compose up -d
 ```
 
 固定版本时把 `:latest` 换成对应的时间戳 tag，例如 `:20261119-063000`。`pull` 和 `up` 要用同一个
 `OJ_BACKEND_IMAGE`，否则 compose 会去拉默认的 `hgnuoj-backend:local`；
-想长期固定，可写入 `install/docker/.env`（该文件已被 `.gitignore` 排除）：
+想长期固定，可写入 `install/docker-hgnu/.env`（该文件已被 `.gitignore` 排除）：
 
 ```bash
 OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest
@@ -111,7 +140,7 @@ CI 推送需要仓库 Actions secret `DOCKER_TOKEN`（Docker Hub Access Token，
 先按第三节构建出 `hgnuoj-backend:local`，再：
 
 ```bash
-cd install/docker
+cd install/docker-hgnu
 docker compose up -d
 ```
 
@@ -161,7 +190,7 @@ docker exec oj-backend hydrooj cli user setSuperAdmin 4
 | --- | --- | --- | --- |
 | `judge` | `examplepassword` | 2 | 测评机（见 `judge/judge.yaml`） |
 
-**部署到公网前务必修改 judge 密码**，并同步改 `install/docker/judge/judge.yaml` 里的 `password`。
+**部署到公网前务必修改 judge 密码**，并同步改 `install/docker-hgnu/judge/judge.yaml` 里的 `password`。
 
 ---
 
@@ -171,7 +200,7 @@ judge 镜像要装一整套编译器（gcc/g++/openjdk/rustc/ghc/golang/php/ruby
 下载量约 1GB，**首次构建可能 30 分钟以上**，所以默认不启动。
 
 ```bash
-cd install/docker
+cd install/docker-hgnu
 
 # 1. 准备 sandbox 二进制（构建容器不继承宿主机代理，GitHub 常常拉不下来）
 curl -L -o judge/sandbox \
@@ -196,7 +225,7 @@ docker compose --profile judge up -d
   也可用 `--build-arg GO_JUDGE_URLS=<你的地址>` 指定。
 - sandbox 二进制**只有 amd64 版本**，arm64 机器需要自行处理。
 
-想每次 `up -d` 都带上 judge，在 `install/docker/.env` 写：
+想每次 `up -d` 都带上 judge，在 `install/docker-hgnu/.env` 写：
 
 ```
 COMPOSE_PROFILES=judge
@@ -207,7 +236,7 @@ COMPOSE_PROFILES=judge
 ## 七、更新代码
 
 使用 Docker Hub 镜像时，先确认有人在 Actions 里手动发布过（`publish=true`），然后在
-`install/docker` 下拉新镜像并重建 backend 容器（mongo 和数据不动）：
+`install/docker-hgnu` 下拉新镜像并重建 backend 容器（mongo 和数据不动）：
 
 ```bash
 export OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest
@@ -221,13 +250,13 @@ docker compose up -d oj-backend
 git pull
 
 # 在仓库根目录重新构建
-docker build -f install/docker/source/Dockerfile -t hgnuoj-backend:local .
+docker build -f install/docker-hgnu/source/Dockerfile -t hgnuoj-backend:local .
 
-cd install/docker
+cd install/docker-hgnu
 docker compose up -d oj-backend    # 只重建 backend，mongo 和数据不动
 ```
 
-数据在 `install/docker/data/`（`mongo/` 数据库、`file/` 附件、`backend/` 运行时配置），
+数据在 `install/docker-hgnu/data/`（`mongo/` 数据库、`file/` 附件、`backend/` 运行时配置），
 重建容器不会影响它们。更新前建议按第八节备份。
 
 ---
@@ -235,7 +264,7 @@ docker compose up -d oj-backend    # 只重建 backend，mongo 和数据不动
 ## 八、常用运维命令
 
 ```bash
-cd install/docker
+cd install/docker-hgnu
 
 docker compose ps                          # 状态
 docker compose logs -f oj-backend          # 日志
@@ -254,7 +283,7 @@ docker exec -it oj-backend sh
 在宿主机上直接用 mongodump 更简单：
 
 ```bash
-cd install/docker
+cd install/docker-hgnu
 
 # 数据库
 docker exec oj-mongo mongodump \
@@ -319,7 +348,7 @@ judge 已移到 `judge` profile，默认不会被构建。
 
 ### 端口 80 被占用
 
-改 `install/docker/docker-compose.yml` 里 `oj-backend` 的 `ports`，
+改 `install/docker-hgnu/docker-compose.yml` 里 `oj-backend` 的 `ports`，
 只改冒号左边（宿主机端口），右边保持 `8888`。
 
 ---
@@ -328,11 +357,11 @@ judge 已移到 `judge` profile，默认不会被构建。
 
 | 文件 | 说明 |
 | --- | --- |
-| `install/docker/source/Dockerfile` | 源码构建后端镜像（多阶段） |
-| `install/docker/source/README.md` | 构建细节与产物检查方法 |
-| `install/docker/docker-compose.yml` | 编排文件；backend 用 `hgnuoj-backend:local` |
-| `install/docker/judge/Dockerfile` | 测评机镜像，支持换源与本地 sandbox |
-| `install/docker/backend/Dockerfile` | 旧的 npm 安装方式，compose 已不再使用 |
+| `install/docker-hgnu/source/Dockerfile` | 源码构建后端镜像（多阶段） |
+| `install/docker-hgnu/source/README.md` | 构建细节与产物检查方法 |
+| `install/docker-hgnu/docker-compose.yml` | 编排文件；backend 用 `hgnuoj-backend:local` |
+| `install/docker-hgnu/judge/Dockerfile` | 测评机镜像，支持换源与本地 sandbox |
+| `install/docker-hgnu/backend/Dockerfile` | 旧的 npm 安装方式，compose 已不再使用 |
 | `.dockerignore` | 构建上下文排除规则 |
 | `.github/workflows/image.yml` | push 到 master 时构建、冒烟检查（不推送）；手动 `publish=true` 才推 Docker Hub |
 

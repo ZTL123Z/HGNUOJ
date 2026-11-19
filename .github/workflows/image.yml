@@ -66,7 +66,7 @@ jobs:
       with:
         # 上下文必须是仓库根目录：Dockerfile 里 COPY 整个工作区
         context: .
-        file: install/docker/source/Dockerfile
+        file: install/docker-hgnu/source/Dockerfile
         # 只构建当前 runner 的架构（amd64），先加载到本地做冒烟检查；
         # 推送放到验证之后，确保推上去的就是被测试过的同一个镜像。
         platforms: linux/amd64
