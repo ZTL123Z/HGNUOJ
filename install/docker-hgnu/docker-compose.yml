@@ -2,7 +2,9 @@ services:
   # Warning: mongodb here is not password-protected.
   # DO NOT EXPOSE THIS SERVICE TO THE PUBLIC.
   oj-mongo:
-    image: mongo:7-jammy
+    # CI 发布的薄封装镜像（官方 mongo:7-jammy + 首次启动的初始化脚本）。
+    # 默认直接拉 Docker Hub；要用本地构建的镜像时用 OJ_MONGO_IMAGE 覆盖。
+    image: ${OJ_MONGO_IMAGE:-ztl123z/hgnu-mongodb:latest}
     container_name: oj-mongo
     restart: always
     volumes:
@@ -13,12 +15,13 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
   oj-backend:
-    # 用仓库源码构建出来的镜像（含前端编译产物），不再在本地 build。
-    # 构建命令在仓库根目录执行：
+    # 本仓库源码 + 编译好的前端产物，由 GitHub Actions 构建发布。
+    # 用本地构建的镜像：在仓库根目录
     #   docker build -f install/docker-hgnu/source/Dockerfile -t hgnuoj-backend:local .
-    # 想换成别的 tag（例如 CI 产出的镜像）时，用 OJ_BACKEND_IMAGE 覆盖即可。
-    image: ${OJ_BACKEND_IMAGE:-hgnuoj-backend:local}
+    # 然后设 OJ_BACKEND_IMAGE=hgnuoj-backend:local
+    image: ${OJ_BACKEND_IMAGE:-ztl123z/hgnu-backend:latest}
     container_name: oj-backend
     restart: always
     depends_on:
@@ -39,14 +42,11 @@ services:
       start_interval: 5s
 
   oj-judge:
-    # 默认不参与 `docker compose up -d`。
-    # judge 镜像要装一整条编译器链（gcc/g++/openjdk/rustc/ghc/golang/mono...），
-    # 首次构建通常要 30 分钟以上，不该阻塞后端的启动。
-    # 需要测评机时显式带上 profile：
-    #   docker compose --profile judge up -d
-    # 想让它长期默认启动，就在 install/docker-hgnu/.env 里写 COMPOSE_PROFILES=judge
-    profiles: ["judge"]
-    build: ./judge
+    # 测评机镜像同样来自 CI 发布，不再本地 build：
+    # 编译器链首次构建半小时以上，用预构建镜像才能三件套一条命令起来。
+    # 需要 rust/ghc/golang/php/ruby/mono 时，自己加 --build-arg COMPILERS=full
+    # 构建一份，再用 OJ_JUDGE_IMAGE 指过去。
+    image: ${OJ_JUDGE_IMAGE:-ztl123z/hgnu-judge:latest}
     container_name: oj-judge
     restart: always
     privileged: true

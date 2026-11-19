@@ -47,65 +47,34 @@ docker run --rm --entrypoint sh hgnuoj-backend:local \
 
 ## 配合 docker-compose 使用
 
-`install/docker-hgnu/docker-compose.yml` 的 `oj-backend` 已经改成引用这个镜像：
+`install/docker-hgnu/docker-compose.yml` 默认拉 Docker Hub 上 CI 构建好的镜像，
+本地构建时用环境变量指过去：
 
 ```yaml
   oj-backend:
-    image: ${OJ_BACKEND_IMAGE:-hgnuoj-backend:local}
+    image: ${OJ_BACKEND_IMAGE:-ztl123z/hgnu-backend:latest}
 ```
-
-所以先在仓库根目录构建，再启动：
 
 ```bash
 docker build -f install/docker-hgnu/source/Dockerfile -t hgnuoj-backend:local .
-cd install/docker-hgnu && docker compose up -d
+cd install/docker-hgnu && OJ_BACKEND_IMAGE=hgnuoj-backend:local docker compose up -d
 ```
 
-`oj-judge` 带有 `profiles: ["judge"]`，默认**不会**被 `up -d` 构建/启动（它的编译器链首次构建要半小时以上）。
-需要测评机时先构建镜像，再带 profile 启动：
-
-```bash
-cd install/docker-hgnu
-docker build -f judge/Dockerfile \
-  --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
-  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-  -t hgnuoj-judge:local judge
-
-docker compose --profile judge up -d
-```
-
-想让它长期默认启动，在 `install/docker-hgnu/.env` 里写 `COMPOSE_PROFILES=judge`。
-
-### judge 构建的两个坑
-
-1. **`COMPILERS=full` 会下载 ~1GB 编译器链**（ghc 一个就 70MB+）。只需要 C/C++/Python/Java 时加
-   `--build-arg COMPILERS=minimal`，构建时间从半小时级降到十几秒。
-2. **go-judge 的 `sandbox` 二进制在 GitHub Releases 上**，构建容器不继承宿主机的代理设置，国内常常拉不下来。
-   最稳的做法是提前下载好放到 `install/docker-hgnu/judge/sandbox`（该文件已 gitignore），Dockerfile 会优先用它：
-
-   ```bash
-   curl -L -o install/docker-hgnu/judge/sandbox \
-     https://github.com/criyle/go-judge/releases/download/v1.14.0/go-judge_1.14.0_linux_amd64v3
-   chmod +x install/docker-hgnu/judge/sandbox
-   ```
-
-   没有本地文件时，Dockerfile 会依次尝试 `GO_JUDGE_URLS` 里的多个地址（官方 + 几个加速前缀）；
-   也可以 `--build-arg GO_JUDGE_URLS=<你的可用地址>` 指定。注意 sandbox 只有 **amd64** 版本。
+`oj-judge` 和 `oj-mongo` 同样默认拉 CI 镜像（`OJ_JUDGE_IMAGE` / `OJ_MONGO_IMAGE`），
+不再需要本地构建，`docker compose up -d` 会三件套一起起。
+测评机镜像自己的构建方式见 `../DEPLOY.md` 第 3.2 节。
 
 ## GitHub Actions
 
-`.github/workflows/image.yml` 在每次 push 到 `master`（即分支合并进来）时：
+`.github/workflows/image.yml` 负责三个镜像（backend / judge / mongodb）：
 
-1. 用这份 Dockerfile 完整构建一次镜像（含前端编译）
-2. 冒烟检查镜像里的前端产物和后端模块能否加载
-3. 构建层和 yarn 缓存存进 Actions 缓存，后续运行可复用
+- **push 到 `master`**：只构建 backend 并冒烟检查，不推送；judge/mongodb 不参与
+- **手动 `Run workflow`**：用 `target` 选择 `backend`（默认）/ `judge` / `mongodb` / `all`
+- **推送条件**：手动运行 + 分支 `master` + `publish=true`，三者同时满足才推
 
-**push 触发只构建和冒烟检查，不推送镜像。** 需要发版时到 Actions 页面手动
-`Run workflow`，分支选 `master`、把 `publish` 设为 `true`；构建和冒烟检查通过后才会把
-同一个镜像推到公开仓库 `ztl123z/hgnu-backend`，打 `latest` 和构建时间戳
-`YYYYMMDD-HHMMSS`（UTC）两个 tag。
-默认 `publish=false`；手动运行选其他分支（包括 `ops-test`）时同样只构建、不推送，
-不会覆盖 `latest`。
+发布时三个镜像共用同一个时间戳 tag `YYYYMMDD-HHMMSS`（UTC），同时更新 `latest`。
+发布信息会写进 Actions 的 run 摘要。
 
-推送需要仓库 Actions secret `DOCKER_TOKEN`（Docker Hub Access Token，有
-`ztl123z/hgnu-backend` 的 push 权限），登录用户名是 `ztl123z`。fork 不会推送。
+推送需要仓库 Actions secret `DOCKER_TOKEN`（Docker Hub Access Token，对
+`ztl123z/hgnu-backend`、`ztl123z/hgnu-judge`、`ztl123z/hgnu-mongodb` 有 push 权限），
+登录用户名是 `ztl123z`。fork 不会推送。
