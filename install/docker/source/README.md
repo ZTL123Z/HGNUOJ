@@ -96,8 +96,14 @@ docker compose --profile judge up -d
 
 `.github/workflows/image.yml` 在每次 push 到 `master`（即分支合并进来）时：
 
-1. 用这份 Dockerfile 完整构建一次镜像（含前端编译），不推送到任何镜像仓库
+1. 用这份 Dockerfile 完整构建一次镜像（含前端编译）
 2. 冒烟检查镜像里的前端产物和后端模块能否加载
-3. 构建层和 yarn 缓存存进 Actions 缓存，后续运行可复用
+3. 检查通过后把同一个镜像推送到公开仓库 `ztl123z/hgnu-backend`，打 `latest`
+   和 `sha-<7 位 commit>` 两个 tag
+4. 构建层和 yarn 缓存存进 Actions 缓存，后续运行可复用
 
-也可以在 Actions 页面手动 `Run workflow`，指定分支试构建。
+推送需要仓库 Actions secret `DOCKER_TOKEN`（Docker Hub Access Token，有
+`ztl123z/hgnu-backend` 的 push 权限），登录用户名是 `ztl123z`。
+
+也可以在 Actions 页面手动 `Run workflow`，指定分支试构建：默认 `publish=false`
+只构建和冒烟检查；设为 `true` 时也会推送，并覆盖 `latest`。fork 不会推送。

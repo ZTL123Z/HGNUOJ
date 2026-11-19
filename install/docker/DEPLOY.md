@@ -74,6 +74,38 @@ docker build -f install/docker/source/Dockerfile \
 
 ## 四、启动服务
 
+### 方式 A：使用 CI 推送到 Docker Hub 的镜像（推荐）
+
+`master` 有新提交、且构建和冒烟检查通过后，GitHub Actions 会把镜像推到
+`ztl123z/hgnu-backend`，同时打两个 tag：
+
+- `latest`：当前 `master` 最新构建
+- `sha-<7 位 commit>`：固定版本，适合回滚 / 核对代码版本
+
+这是 **public** 仓库，拉取不需要登录。也可以到 Actions 页面手动
+`Run workflow` 并把 `publish` 设为 `true`；默认 `publish=false` 只试构建，不覆盖 `latest`。
+
+```bash
+cd install/docker
+OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest docker compose pull oj-backend
+OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest docker compose up -d
+```
+
+固定版本时把 `:latest` 换成 `:sha-abcdefg`。`pull` 和 `up` 要用同一个
+`OJ_BACKEND_IMAGE`，否则 compose 会去拉默认的 `hgnuoj-backend:local`；
+想长期固定，可写入 `install/docker/.env`（该文件已被 `.gitignore` 排除）：
+
+```bash
+OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest
+```
+
+CI 推送需要仓库 Actions secret `DOCKER_TOKEN`（Docker Hub Access Token，对
+`ztl123z/hgnu-backend` 有 push 权限）。不要把 token 写进 compose、`.env` 或代码仓库。
+
+### 方式 B：使用本地构建镜像
+
+先按第三节构建出 `hgnuoj-backend:local`，再：
+
 ```bash
 cd install/docker
 docker compose up -d
@@ -170,6 +202,17 @@ COMPOSE_PROFILES=judge
 
 ## 七、更新代码
 
+使用 Docker Hub 镜像时，先确认 CI 构建成功，然后在 `install/docker` 下拉新镜像并重建
+backend 容器（mongo 和数据不动）：
+
+```bash
+export OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest
+docker compose pull oj-backend
+docker compose up -d oj-backend
+```
+
+使用本地构建镜像时：
+
 ```bash
 git pull
 
@@ -181,7 +224,7 @@ docker compose up -d oj-backend    # 只重建 backend，mongo 和数据不动
 ```
 
 数据在 `install/docker/data/`（`mongo/` 数据库、`file/` 附件、`backend/` 运行时配置），
-重建容器不会影响它们。
+重建容器不会影响它们。更新前建议按第八节备份。
 
 ---
 
@@ -287,10 +330,11 @@ judge 已移到 `judge` profile，默认不会被构建。
 | `install/docker/judge/Dockerfile` | 测评机镜像，支持换源与本地 sandbox |
 | `install/docker/backend/Dockerfile` | 旧的 npm 安装方式，compose 已不再使用 |
 | `.dockerignore` | 构建上下文排除规则 |
-| `.github/workflows/image.yml` | push 到 master 时自动构建镜像并冒烟检查 |
+| `.github/workflows/image.yml` | push 到 master 时构建、冒烟检查，通过后推送 Docker Hub |
 
 镜像 tag 可用环境变量覆盖：
 
 ```bash
-OJ_BACKEND_IMAGE=hgnuoj-backend:sha-abc123 docker compose up -d
+OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:latest docker compose up -d
+OJ_BACKEND_IMAGE=ztl123z/hgnu-backend:sha-abc1234 docker compose up -d
 ```

@@ -1,8 +1,12 @@
 name: Image
 
-# 只做一件事：每次 master 有新提交（也就是有分支合并进来）时，
-# 从头编译一次前端，并用仓库源码构建出 backend 镜像，验证镜像能构建成功。
-# 不推送镜像仓库，也不需要任何额外的 secret。
+# 每次 master 有新提交（也就是有分支合并进来）时，从头编译一次前端，
+# 用仓库源码构建 backend 镜像，冒烟检查通过后把同一个镜像推送到 Docker Hub public 仓库。
+#
+# 手动运行默认只构建 + 冒烟检查；把 publish 设为 true 才推送，且会覆盖 latest。
+# 推送凭据来自仓库 Actions secret DOCKER_TOKEN（Docker Hub Access Token，需要可 push
+# 到 ztl123z/hgnu-backend）；用户名 ztl123z 不是 secret，直接写在 env 里。
+# 只从 ZTL123Z/HGNUOJ 发布，fork 仍会构建/冒烟检查，但不会推送。
 #
 # 为什么单独一个 workflow：build.yml 是上游 Hydro 的 CI（lint + test + 发布上游 npm 包），
 # 跟镜像构建的触发条件和耗时完全不同，混在一起会让两边互相拖慢。
@@ -10,8 +14,17 @@ name: Image
 on:
   push:
     branches: [master]
-  # 手动作业：需要在合并前试构建某个分支时用
+  # 手动作业：默认试构建；publish=true 时也发布
   workflow_dispatch:
+    inputs:
+      publish:
+        description: '是否推送到 Docker Hub（true 会覆盖 latest）'
+        type: choice
+        required: false
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
 
 # 同一个分支有新的推送时，取消还在跑的旧构建，省 Actions 额度
 concurrency:
@@ -25,7 +38,9 @@ env:
   CI: true
   # Corepack 首次下载 yarn 时会交互式询问，CI 里必须关掉
   COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
-  IMAGE_NAME: hgnuoj-backend
+  LOCAL_IMAGE: hgnuoj-backend
+  DOCKERHUB_USERNAME: ztl123z
+  DOCKERHUB_IMAGE: ztl123z/hgnu-backend
 
 jobs:
   build-image:
@@ -48,11 +63,12 @@ jobs:
         # 上下文必须是仓库根目录：Dockerfile 里 COPY 整个工作区
         context: .
         file: install/docker/source/Dockerfile
-        # 只构建当前 runner 的架构（amd64），不推送
+        # 只构建当前 runner 的架构（amd64），先加载到本地做冒烟检查；
+        # 推送放到验证之后，确保推上去的就是被测试过的同一个镜像。
         platforms: linux/amd64
         push: false
         load: true
-        tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+        tags: ${{ env.LOCAL_IMAGE }}:${{ github.sha }}
         # Dockerfile 里的 yarn 缓存用 cache mount，默认只活在单次构建内；
         # type=gha 把构建层和 cache mount 一起存进 Actions 缓存，下次运行可直接复用，
         # 不用每次重新下载依赖、重编译 webpack。
@@ -65,7 +81,7 @@ jobs:
     - name: Smoke test image
       run: |
         set -euo pipefail
-        IMAGE="${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        IMAGE="${{ env.LOCAL_IMAGE }}:${{ github.sha }}"
 
         echo '::group::前端构建产物'
         docker run --rm --entrypoint sh "$IMAGE" -c '
@@ -85,4 +101,30 @@ jobs:
         echo '::endgroup::'
 
     - name: Image size
-      run: docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' "${{ env.IMAGE_NAME }}"
+      run: docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' "${{ env.LOCAL_IMAGE }}:${{ github.sha }}"
+
+    # 先验证再登录、打 tag 和推送；保证 latest / sha tag 指向同一个已测试的本地镜像。
+    # 手动运行默认 publish=false，只做试构建；fork 永远不会执行推送。
+    - name: Log in to Docker Hub
+      if: ${{ github.repository == 'ZTL123Z/HGNUOJ' && (github.event_name == 'push' || inputs.publish == 'true') }}
+      uses: docker/login-action@v3
+      with:
+        registry: docker.io
+        username: ${{ env.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKER_TOKEN }}
+        logout: true
+
+    - name: Push image to Docker Hub
+      if: ${{ github.repository == 'ZTL123Z/HGNUOJ' && (github.event_name == 'push' || inputs.publish == 'true') }}
+      run: |
+        set -euo pipefail
+        LOCAL="${{ env.LOCAL_IMAGE }}:${{ github.sha }}"
+        REMOTE="${{ env.DOCKERHUB_IMAGE }}"
+        SHORT_SHA="${GITHUB_SHA::7}"
+        SHA_TAG="$REMOTE:sha-$SHORT_SHA"
+
+        docker tag "$LOCAL" "$SHA_TAG"
+        docker tag "$LOCAL" "$REMOTE:latest"
+        echo "Publishing $SHA_TAG and $REMOTE:latest"
+        docker push "$SHA_TAG"
+        docker push "$REMOTE:latest"

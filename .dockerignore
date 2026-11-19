@@ -28,5 +28,7 @@ packages/ui-next/public
 install/docker/data
 *.log
 *.mmdb
-.env
-.env.*
+# .env 不只在仓库根目录（install/docker/.env 是 compose 本地配置），
+# 不带目录前缀的写法只匹配根目录，所以这里用 ** 覆盖任意层级
+**/.env
+**/.env.*
