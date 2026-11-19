@@ -1,6 +1,6 @@
 # 从源码构建后端镜像
 
-`install/docker/backend/Dockerfile` 是从 npm 安装发布版 `hydrooj` / `@hydrooj/ui-default`，
+`install/docker-hgnu/backend/Dockerfile` 是从 npm 安装发布版 `hydrooj` / `@hydrooj/ui-default`，
 镜像里**不含**本仓库的定制代码。这里这份 Dockerfile 改用仓库源码，并把它编译出的前端静态资源一起打进镜像。
 
 ## 本地构建
@@ -8,13 +8,13 @@
 构建上下文必须是仓库根目录（Dockerfile 里 `COPY` 整个工作区）：
 
 ```bash
-docker build -f install/docker/source/Dockerfile -t hgnuoj-backend:local .
+docker build -f install/docker-hgnu/source/Dockerfile -t hgnuoj-backend:local .
 ```
 
 国内网络可以换源：
 
 ```bash
-docker build -f install/docker/source/Dockerfile \
+docker build -f install/docker-hgnu/source/Dockerfile \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
   --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
   -t hgnuoj-backend:local .
@@ -47,7 +47,7 @@ docker run --rm --entrypoint sh hgnuoj-backend:local \
 
 ## 配合 docker-compose 使用
 
-`install/docker/docker-compose.yml` 的 `oj-backend` 已经改成引用这个镜像：
+`install/docker-hgnu/docker-compose.yml` 的 `oj-backend` 已经改成引用这个镜像：
 
 ```yaml
   oj-backend:
@@ -57,15 +57,15 @@ docker run --rm --entrypoint sh hgnuoj-backend:local \
 所以先在仓库根目录构建，再启动：
 
 ```bash
-docker build -f install/docker/source/Dockerfile -t hgnuoj-backend:local .
-cd install/docker && docker compose up -d
+docker build -f install/docker-hgnu/source/Dockerfile -t hgnuoj-backend:local .
+cd install/docker-hgnu && docker compose up -d
 ```
 
 `oj-judge` 带有 `profiles: ["judge"]`，默认**不会**被 `up -d` 构建/启动（它的编译器链首次构建要半小时以上）。
 需要测评机时先构建镜像，再带 profile 启动：
 
 ```bash
-cd install/docker
+cd install/docker-hgnu
 docker build -f judge/Dockerfile \
   --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
@@ -74,19 +74,19 @@ docker build -f judge/Dockerfile \
 docker compose --profile judge up -d
 ```
 
-想让它长期默认启动，在 `install/docker/.env` 里写 `COMPOSE_PROFILES=judge`。
+想让它长期默认启动，在 `install/docker-hgnu/.env` 里写 `COMPOSE_PROFILES=judge`。
 
 ### judge 构建的两个坑
 
 1. **`COMPILERS=full` 会下载 ~1GB 编译器链**（ghc 一个就 70MB+）。只需要 C/C++/Python/Java 时加
    `--build-arg COMPILERS=minimal`，构建时间从半小时级降到十几秒。
 2. **go-judge 的 `sandbox` 二进制在 GitHub Releases 上**，构建容器不继承宿主机的代理设置，国内常常拉不下来。
-   最稳的做法是提前下载好放到 `install/docker/judge/sandbox`（该文件已 gitignore），Dockerfile 会优先用它：
+   最稳的做法是提前下载好放到 `install/docker-hgnu/judge/sandbox`（该文件已 gitignore），Dockerfile 会优先用它：
 
    ```bash
-   curl -L -o install/docker/judge/sandbox \
+   curl -L -o install/docker-hgnu/judge/sandbox \
      https://github.com/criyle/go-judge/releases/download/v1.14.0/go-judge_1.14.0_linux_amd64v3
-   chmod +x install/docker/judge/sandbox
+   chmod +x install/docker-hgnu/judge/sandbox
    ```
 
    没有本地文件时，Dockerfile 会依次尝试 `GO_JUDGE_URLS` 里的多个地址（官方 + 几个加速前缀）；
